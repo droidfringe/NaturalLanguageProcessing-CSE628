@@ -15,6 +15,8 @@ class ParsingSystem:
         self.labels = labels
         self.transitions = []
         self.rootLabel = labels[0]
+        # print ('Labels: ')
+        # print (labels)
         self.makeTransitions()
 
     """
@@ -41,10 +43,11 @@ class ParsingSystem:
 
         # Put the ROOT node on the stack
         c.stack.append(0)
-
+        # print('is c none?', c is None)
         return c
 
     def isTerminal(self, c):
+        # print ('ParsingSystem: isTerminal: is c None?', c is None)
         return c.getStackSize() == 1 and c.getBufferSize() == 0
 
     """
@@ -102,6 +105,28 @@ class ParsingSystem:
 
         =================================================================
         """
+        # print('Before operation')
+        # print c.getStr()
+        # print t
+        # Shift
+        if(t.startswith("S")):
+            c.shift()
+        # Left arc
+        elif(t.startswith("L")):
+            w0 = c.getStack(0)
+            w1 = c.getStack(1)
+            c.addArc(w0,w1,t[2:-1])
+            c.removeSecondTopStack()
+        # Right arc
+        elif(t.startswith("R")):
+            w0 = c.getStack(0)
+            w1 = c.getStack(1)
+            c.addArc(w1,w0,t[2:-1])
+            c.removeTopStack()
+        # print('After operation')
+        return c
+        # print c.getStr()
+
 
     def numTransitions(self):
         return len(self.transitions)
