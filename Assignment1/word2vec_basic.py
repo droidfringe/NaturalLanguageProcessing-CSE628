@@ -32,6 +32,7 @@ import loss_func as tf_func
 import pickle
 from collections import namedtuple
 
+import word_analogy
 
 
 
@@ -112,7 +113,8 @@ def generate_batch(data, batch_size, num_skips, skip_window):
   assert num_skips <= 2 * skip_window
   batch = np.ndarray(shape=(batch_size), dtype=np.int32)
   labels = np.ndarray(shape=(batch_size, 1), dtype=np.int32)
-
+  #print('generate_batch:')
+  #print(data)
   """
   =================================================================================
 
@@ -155,8 +157,29 @@ def generate_batch(data, batch_size, num_skips, skip_window):
 
   ===============================================================================
   """
-
-
+  context_index = data_index + (num_skips//2)
+  iters = batch_size//num_skips
+  idx = 0
+  #print(data[0:10])
+  #print('Iters = ', iters)
+  data_len = len(data)
+  for iteration in range(iters):
+    #print(data_index, context_index)
+    for i in range(data_index,context_index):
+      batch[idx] = data[context_index]
+      labels[idx] = data[i]
+      idx += 1
+    for i in range(context_index+1, context_index + 1 + (num_skips//2)):
+      batch[idx] = data[context_index]
+      labels[idx] = data[i]
+      idx += 1
+    data_index += 1
+    context_index += 1
+    if(context_index + (num_skips//2) >= data_len):
+      print('Circle around')
+      data_index = 0
+      context_index = data_index + (num_skips//2)
+  return (batch, labels)
 
 def build_model(sess, graph, loss_model):
   """
@@ -194,17 +217,19 @@ def build_model(sess, graph, loss_model):
       nce_biases = tf.Variable(tf.zeros([vocabulary_size]))
 
     if loss_model == 'cross_entropy':
+      print('Using Cross Entropy Loss')
       loss = tf.reduce_mean(tf_func.cross_entropy_loss(embed, true_w))
     else:
       #sample negative examples with unigram probability
       sample = np.random.choice(vocabulary_size, num_sampled, p=unigram_prob, replace=False)
-
+      print(sess.run([tf.shape(unigram_prob), tf.shape(train_labels[:]), tf.shape(train_labels)]))
       loss = tf.reduce_mean(tf_func.nce_loss(embed, nce_weights, nce_biases, train_labels, sample, unigram_prob))
 
     # tf.summary.scalar('loss', loss)
 
     # Construct the SGD optimizer using a learning rate of 1.0.
-    optimizer = tf.train.GradientDescentOptimizer(1.0).minimize(loss, global_step=global_step)
+    # optimizer = tf.train.GradientDescentOptimizer(1.0).minimize(loss, global_step=global_step)
+    optimizer = tf.train.GradientDescentOptimizer(0.1).minimize(loss, global_step=global_step)
 
     # Compute the cosine similarity between minibatch examples and all embeddings.
     norm = tf.sqrt(tf.reduce_sum(tf.square(embeddings), 1, keep_dims=True))
@@ -251,6 +276,7 @@ def train(sess, model, data, dictionary, batch_size, num_skips, skip_window,
   average_loss = 0
   for step in xrange(max_num_steps):
     batch_inputs, batch_labels = generate_batch(data, batch_size, num_skips, skip_window)
+    # print('training: ', batch_inputs.shape, batch_labels.shape)
     feed_dict = {model.train_inputs.name: batch_inputs, model.train_labels.name: batch_labels}
 
     # We perform one update step by evaluating the optimizer op (including it
@@ -274,6 +300,8 @@ def train(sess, model, data, dictionary, batch_size, num_skips, skip_window,
       for i in xrange(valid_size):
         valid_word = reverse_dictionary[valid_examples[i]]
         top_k = 8  # number of nearest neighbors
+        # Reset to 8 after experiment
+        # top_k = 20
         nearest = (-sim[i, :]).argsort()[1:top_k + 1]
         log_str = "Nearest to %s:" % valid_word
         for k in xrange(top_k):
@@ -291,6 +319,12 @@ def train(sess, model, data, dictionary, batch_size, num_skips, skip_window,
 
   return final_embeddings
 
+def findAccuracy():
+    out = os.popen('./my_score_maxdiff.pl word_analogy_dev_mturk_answers.txt result.txt output.txt')
+    q = out.read()
+    out.close()
+    acc = float(q.strip())
+    return acc
 
 
 
@@ -300,7 +334,8 @@ if __name__ == '__main__':
   if len(sys.argv) > 1:
     if sys.argv[1] == 'nce':
       loss_model = 'nce'
-
+  # remove this line before submission
+  # loss_model = 'nce'
 
   ####################################################################################
   # Step 1: Download the data.
@@ -354,7 +389,14 @@ if __name__ == '__main__':
   valid_size = 16     # Random set of words to evaluate similarity on.
   valid_window = 100  # Only pick dev samples in the head of the distribution.
   valid_examples = np.random.choice(valid_window, valid_size, replace=False)
-  num_sampled = 64    # Number of negative examples to sample.
+
+  # Find words similar to these words
+  # Comment this after including the result in report
+  # query_words = ['first', 'american', 'would']
+  # valid_size = 3
+  # valid_examples = np.array([dictionary[w] for w in query_words])
+
+  num_sampled = 32    # Number of negative examples to sample.
 
   # summary_path = './summary_%s'%(loss_model)
   pretrained_model_path = './pretrained/'
@@ -395,5 +437,103 @@ if __name__ == '__main__':
     maybe_create_path(model_path)
     model_filepath = os.path.join(model_path, 'word2vec_%s.model'%(loss_model))
     print("Saving word2vec model as [%s]"%(model_filepath))
-    pickle.dump([dictionary, trained_steps, embeddings], open(model_filepath, 'w'))
+    pickle.dump([dictionary, trained_steps, embeddings], open(model_filepath, 'wb'))
 
+
+
+# The code for experimentation.
+# Used for doing hyperparameter sweeps
+'''
+if __name__ == '__main__':
+  loss_models = ['cross_entropy', 'nce']
+  loss_model = 'nce'
+  url = 'http://mattmahoney.net/dc/'
+  filename = maybe_download('text8.zip', 31344016)
+  words = read_data(filename)
+  vocabulary_size = 100000
+
+  data, count, dictionary, reverse_dictionary = build_dataset(words)
+  del words  # Hint to reduce memory.
+
+  # Calculate the probability of unigrams
+  unigram_cnt = [c for w, c in count]
+  total = sum(unigram_cnt)
+  unigram_prob = [c * 1.0 / total for c in unigram_cnt]
+
+  out_file = open('experimentResults.txt', 'w')
+
+  batch_sizes = [64, 128, 256]
+  window_params = [(2, 4), (4, 8), (8, 16)]
+  num_negative_samples = [32, 64, 128]
+  #num_negative_samples = [128]
+  for batch_size in batch_sizes:
+    for (skip_window, num_skips) in window_params:
+      for num_sampled in num_negative_samples:
+        data_index = 0
+        # Hyper Parameters to config
+        # Dimension of the embedding vector.
+        embedding_size = 128
+
+        # batch_size = 128
+        # skip_window = 4  # How many words to consider left and right.
+        # num_skips = 8  # How many times to reuse an input to generate a label.
+
+        # We pick a random validation set to sample nearest neighbors. Here we limit the
+        # validation samples to the words that have a low numeric ID, which by
+        # construction are also the most frequent.
+        valid_size = 16  # Random set of words to evaluate similarity on.
+        valid_window = 100  # Only pick dev samples in the head of the distribution.
+        valid_examples = np.random.choice(valid_window, valid_size, replace=False)
+        # query_words = ['first', 'american', 'words']
+        # valid_examples = np.array([dictionary[w] for w in query_words])
+        # num_sampled = 64  # Number of negative examples to sample.
+
+        pretrained_model_path = './pretrained/'
+
+        checkpoint_model_path = './checkpoints_%s/' % (loss_model)
+        model_path = './models'
+
+        # maximum training step
+        max_num_steps = 200001
+        checkpoint_step = 50000
+
+        graph = tf.Graph()
+        with tf.Session(graph=graph) as sess:
+          ####################################################################################
+          # Step 4: Build and train a skip-gram model.
+          model = build_model(sess, graph, loss_model)
+
+          # You must start with the pretrained model.
+          # If you want to resume from your checkpoints, change this path name
+
+          load_pretrained_model(sess, model, pretrained_model_path)
+
+          ####################################################################################
+          # Step 6: Begin training.
+          maybe_create_path(checkpoint_model_path)
+          embeddings = train(sess, model, data, dictionary, batch_size, num_skips, skip_window,
+                                            max_num_steps, checkpoint_step, loss_model)
+
+          ####################################################################################
+          # Step 7: Save the trained model.
+          trained_steps = model.global_step.eval()
+
+          maybe_create_path(model_path)
+          model_filepath = os.path.join(model_path, 'word2vec_%s.model' % (loss_model))
+          # print("Saving word2vec model as [%s]" % (model_filepath))
+          # pickle.dump([dictionary, trained_steps, embeddings], open(model_filepath, 'wb'))
+          word_analogy.findAnswers(dictionary, embeddings, 'word_analogy_dev.txt')
+          acc = findAccuracy()
+          res_str = str(batch_size) + ' ' + str(skip_window) + ' ' + str(num_skips) + ' ' + str(num_sampled) + ' ' + str(acc) + '\n'
+          #res_str = str(batch_size) + ' ' + str(skip_window) + ' ' + str(num_skips) + ' ' + str(acc) + '\n'
+          out_file.write(res_str)
+  out_file.close()
+'''
+
+'''
+cross entropy best params:
+128, (4,8)
+
+nce best params:
+128, (4,8), 32
+'''
